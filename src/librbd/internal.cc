@@ -1451,6 +1451,7 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
     uint64_t order;
     uint64_t size;
     uint64_t p_features;
+    uint64_t stripe_unit, stripe_count;
     int partial_r;
     librbd::NoOpProgressContext no_op;
     ImageCtx *c_imctx = NULL;
@@ -1485,7 +1486,7 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
     }
 
     if (use_p_features) {
-      c_opts.set(RBD_IMAGE_OPTION_FEATURES, p_features);
+      features = p_features;
     }
 
     order = p_imctx->order;
@@ -1493,6 +1494,12 @@ int mirror_image_disable_internal(ImageCtx *ictx, bool force,
       c_opts.set(RBD_IMAGE_OPTION_ORDER, order);
     }
 
+    if (c_opts.get(RBD_IMAGE_OPTION_STRIPE_UNIT, &stripe_unit) == 0 ||
+	c_opts.get(RBD_IMAGE_OPTION_STRIPE_COUNT, &stripe_count) == 0) {
+      features |= RBD_FEATURE_STRIPINGV2;
+    }
+
+    c_opts.set(RBD_IMAGE_OPTION_FEATURES, features);
     r = create(c_ioctx, c_name, size, c_opts, non_primary_global_image_id,
                primary_mirror_uuid);
     if (r < 0) {

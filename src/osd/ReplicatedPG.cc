@@ -11812,6 +11812,18 @@ boost::statechart::result ReplicatedPG::TrimmingObjects::react(const SnapTrim&)
     }
 
     dout(10) << "TrimmingObjects react trimming " << pos << dendl;
+
+    // TEMPORARY CODE TO CLEAN UP SNAPMAPPER
+    ObjectContextRef obc = pg->get_object_context(pos, false, NULL);
+    if (!obc) {
+      dout(0) << "REPAIR SNAP MAPPER " << pos << dendl;
+      ObjectStore::Transaction *t = new ObjectStore::Transaction;
+      pg->clear_object_snap_mapping(t, pos);
+      int r = pg->osd->store->queue_transaction_and_cleanup(pg->osr.get(), t);
+      assert(r == 0);
+      continue;
+    }
+
     RepGather *repop = pg->trim_object(pos);
     if (!repop) {
       dout(10) << __func__ << " could not get write lock on obj "

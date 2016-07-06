@@ -598,7 +598,7 @@ class RBD(object):
         return (major, minor, extra)
 
     def create(self, ioctx, name, size, order=None, old_format=True,
-               features=None, stripe_unit=0, stripe_count=0):
+               features=None, stripe_unit=None, stripe_count=None):
         """
         Create an rbd image.
 
@@ -616,7 +616,7 @@ class RBD(object):
         :type old_format: bool
         :param features: bitmask of features to enable
         :type features: int
-        :param stripe_unit: stripe unit in bytes (default 0 for object size)
+        :param stripe_unit: stripe unit in bytes (default None to let librbd decide)
         :type stripe_unit: int
         :param stripe_count: objects to stripe over before looping
         :type stripe_count: int
@@ -635,7 +635,9 @@ class RBD(object):
         if order is not None:
             _order = order
         if old_format:
-            if features or stripe_unit != 0 or stripe_count != 0:
+            if (features or
+                ((stripe_unit is not None) and stripe_unit != 0) or
+                ((stripe_count is not None) and stripe_count != 0)):
                 raise InvalidArgument('format 1 images do not support feature'
                                       ' masks or non-default striping')
             with nogil:
@@ -649,13 +651,16 @@ class RBD(object):
                     rbd_image_options_set_uint64(opts,
                                                  RBD_IMAGE_OPTION_FEATURES,
                                                  features)
-                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_ORDER,
-                                             _order)
-                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_UNIT,
-                                             stripe_unit)
-                rbd_image_options_set_uint64(opts,
-                                             RBD_IMAGE_OPTION_STRIPE_COUNT,
-                                             stripe_count)
+                if order is not None:
+                    rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_ORDER,
+                                                 _order)
+                if stripe_unit is not None:
+                    rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_UNIT,
+                                                 stripe_unit)
+                if stripe_count is not None:
+                    rbd_image_options_set_uint64(opts,
+                                                 RBD_IMAGE_OPTION_STRIPE_COUNT,
+                                                 stripe_count)
                 with nogil:
                     ret = rbd_create4(_ioctx, _name, _size, opts)
             finally:
@@ -664,7 +669,7 @@ class RBD(object):
             raise make_ex(ret, 'error creating image')
 
     def clone(self, p_ioctx, p_name, p_snapname, c_ioctx, c_name,
-              features=None, order=None, stripe_unit=0, stripe_count=0):
+              features=None, order=None, stripe_unit=None, stripe_count=None):
         """
         Clone a parent rbd snapshot into a COW sparse child.
 
@@ -682,7 +687,7 @@ class RBD(object):
         :type features: int
         :param order: the image is split into (2**order) byte objects
         :type order: int
-        :param stripe_unit: stripe unit in bytes (default 0 for object size)
+        :param stripe_unit: stripe unit in bytes (default None to let librbd decide)
         :type stripe_unit: int
         :param stripe_count: objects to stripe over before looping
         :type stripe_count: int
@@ -702,20 +707,21 @@ class RBD(object):
             char *_p_snapname = p_snapname
             char *_c_name = c_name
             rbd_image_options_t opts
-        if order is None:
-            order = 0
 
         rbd_image_options_create(&opts)
         try:
             if features is not None:
                 rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_FEATURES,
                                              features)
-            rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_ORDER,
-                                         order)
-            rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_UNIT,
-                                         stripe_unit)
-            rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_COUNT,
-                                         stripe_count)
+            if order is not None:
+                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_ORDER,
+                                             order)
+            if stripe_unit is not None:
+                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_UNIT,
+                                             stripe_unit)
+            if stripe_count is not None:
+                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_COUNT,
+                                             stripe_count)
             with nogil:
                 ret = rbd_clone3(_p_ioctx, _p_name, _p_snapname,
                                  _c_ioctx, _c_name, opts)
@@ -1424,7 +1430,7 @@ cdef class Image(object):
         return owner == 1
 
     def copy(self, dest_ioctx, dest_name, features=None, order=None,
-             stripe_unit=0, stripe_count=0):
+             stripe_unit=None, stripe_count=None):
         """
         Copy the image to another location.
 
@@ -1436,7 +1442,7 @@ cdef class Image(object):
         :type features: int
         :param order: the image is split into (2**order) byte objects
         :type order: int
-        :param stripe_unit: stripe unit in bytes (default 0 for object size)
+        :param stripe_unit: stripe unit in bytes (default None to let librbd decide)
         :type stripe_unit: int
         :param stripe_count: objects to stripe over before looping
         :type stripe_count: int
@@ -1446,8 +1452,6 @@ cdef class Image(object):
         :raises: :class:`FunctionNotSupported`
         :raises: :class:`ArgumentOutOfRange`
         """
-        if order is None:
-            order = 0
         dest_name = cstr(dest_name, 'dest_name')
         cdef:
             rados_ioctx_t _dest_ioctx = convert_ioctx(dest_ioctx)
@@ -1459,12 +1463,15 @@ cdef class Image(object):
             if features is not None:
                 rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_FEATURES,
                                              features)
-            rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_ORDER,
-                                         order)
-            rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_UNIT,
-                                         stripe_unit)
-            rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_COUNT,
-                                         stripe_count)
+            if order is not None:
+                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_ORDER,
+                                             order)
+            if stripe_unit is not None:
+                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_UNIT,
+                                             stripe_unit)
+            if stripe_count is not None:
+                rbd_image_options_set_uint64(opts, RBD_IMAGE_OPTION_STRIPE_COUNT,
+                                             stripe_count)
             with nogil:
                 ret = rbd_copy3(self.image, _dest_ioctx, _dest_name, opts)
         finally:

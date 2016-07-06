@@ -552,8 +552,9 @@ bool ImageWatcher::handle_payload(const HeaderUpdatePayload &payload,
   ldout(m_image_ctx.cct, 10) << this << " image header updated" << dendl;
 
   m_image_ctx.state->handle_update_notification();
+  m_image_ctx.state->flush_update_watchers(new C_ResponseMessage(ack_ctx));
   m_image_ctx.perfcounter->inc(l_librbd_notify);
-  return true;
+  return false;
 }
 
 bool ImageWatcher::handle_payload(const AcquiredLockPayload &payload,

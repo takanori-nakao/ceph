@@ -808,6 +808,9 @@ fi
 if [ $1 -eq 1 ] ; then
 /usr/bin/systemctl start ceph.target >/dev/null 2>&1 || :
 fi
+%if 0%{?suse_version}
+ln -sf %{_sbindir}/mount.ceph /sbin/mount.ceph
+%endif
 
 %preun base
 %if 0%{?suse_version}

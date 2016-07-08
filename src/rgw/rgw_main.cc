@@ -578,6 +578,8 @@ static int process_request(RGWRados *store, RGWREST *rest, RGWRequest *req, RGWC
     goto done;
   }
   req->op = op;
+  dout(0) << "process_request_enter" << " " << s->req_id.c_str()
+	  << " " << op->get_type() << dendl;
 
   req->log(s, "authorizing");
   ret = handler->authorize();
@@ -633,9 +635,14 @@ static int process_request(RGWRados *store, RGWREST *rest, RGWRequest *req, RGWC
 
   req->log(s, "executing");
   op->pre_exec();
+  dout(0) << "op_execute_enter" << " " << s->req_id.c_str()
+	  << " " << op->get_type() << dendl;
   op->execute();
+  dout(0) << "op_execute_exit" << " " << s->req_id.c_str()
+	  << " " << op->get_type() << dendl;
   op->complete();
 done:
+  dout(0) << "complete_request_enter" << " " << s->req_id.c_str() << dendl;
   int r = client_io->complete_request();
   if (r < 0) {
     dout(0) << "ERROR: client_io->complete_request() returned " << r << dendl;
@@ -644,6 +651,7 @@ done:
     rgw_log_op(store, s, (op ? op->name() : "unknown"), olog);
   }
 
+  dout(0) << "complete_request_exit" << " " << s->req_id.c_str() << dendl;
   int http_ret = s->err.http_ret;
 
   req->log_format(s, "http status=%d", http_ret);
@@ -654,6 +662,7 @@ done:
 
   dout(1) << "====== req done req=" << hex << req << dec << " http_status=" << http_ret << " ======" << dendl;
 
+  dout(0) << "process_request_exit" << " " << s->req_id.c_str() << dendl;
   return (ret < 0 ? ret : s->err.ret);
 }
 

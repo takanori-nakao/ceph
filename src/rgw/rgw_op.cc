@@ -1813,7 +1813,9 @@ void RGWPutObj::execute()
       orig_data = data;
     }
 
+    dout(0) << "put_data1_enter_" << ofs << " " << s->req_id.c_str() << dendl;
     ret = put_data_and_throttle(processor, data, ofs, (need_calc_md5 ? &hash : NULL), need_to_wait);
+    dout(0) << "put_data1_exit_" << ofs << " " << s->req_id.c_str() << dendl;
     if (ret < 0) {
       if (!need_to_wait || ret != -EEXIST) {
         ldout(s->cct, 20) << "processor->thottle_data() returned ret=" << ret << dendl;
@@ -1835,7 +1837,9 @@ void RGWPutObj::execute()
       gen_rand_alphanumeric(store->ctx(), buf, sizeof(buf) - 1);
       oid_rand.append(buf);
 
+      dout(0) << "put_data2_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
       ret = processor->prepare(store, &oid_rand);
+      dout(0) << "put_data2_exit" << " " << s->req_id.c_str() << " " << ofs << dendl;
       if (ret < 0) {
         ldout(s->cct, 0) << "ERROR: processor->prepare() returned " << ret << dendl;
         goto done;
@@ -1857,12 +1861,14 @@ void RGWPutObj::execute()
   s->obj_size = ofs;
   perfcounter->inc(l_rgw_put_b, s->obj_size);
 
+  dout(0) << "check_quota_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   ret = store->check_quota(s->bucket_owner.get_id(), s->bucket,
                            user_quota, bucket_quota, s->obj_size);
   if (ret < 0) {
     goto done;
   }
 
+  dout(0) << "complete_hash_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   if (need_calc_md5) {
     processor->complete_hash(&hash);
     hash.Final(m);
@@ -1876,6 +1882,7 @@ void RGWPutObj::execute()
     }
   }
 
+  dout(0) << "attr_acl_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   policy.encode(aclbl);
 
   attrs[RGW_ATTR_ACL] = aclbl;
@@ -1907,6 +1914,7 @@ void RGWPutObj::execute()
 
     etag = etag_buf_str;
   }
+  dout(0) << "attr_etag_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   if (supplied_etag && etag.compare(supplied_etag) != 0) {
     ret = -ERR_UNPROCESSABLE_ENTITY;
     goto done;
@@ -1914,14 +1922,17 @@ void RGWPutObj::execute()
   bl.append(etag.c_str(), etag.size() + 1);
   attrs[RGW_ATTR_ETAG] = bl;
 
+  dout(0) << "attrbl_append_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   for (iter = s->generic_attrs.begin(); iter != s->generic_attrs.end(); ++iter) {
     bufferlist& attrbl = attrs[iter->first];
     const string& val = iter->second;
     attrbl.append(val.c_str(), val.size() + 1);
   }
 
+  dout(0) << "request_metadata_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   rgw_get_request_metadata(s->cct, s->info, attrs);
 
+  dout(0) << "proc_complete_enter" << " " << s->req_id.c_str() << " " << ofs << dendl;
   ret = processor->complete(etag, &mtime, 0, attrs, if_match, if_nomatch);
 done:
   dispose_processor(processor);

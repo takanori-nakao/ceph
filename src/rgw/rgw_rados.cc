@@ -1041,7 +1041,7 @@ int RGWPutObjProcessor_Aio::throttle_data(void *handle, bool need_to_wait)
   }
   return 0;
 }
-
+// check
 int RGWPutObjProcessor_Atomic::write_data(bufferlist& bl, off_t ofs, void **phandle, bool exclusive)
 {
   if (ofs >= next_part_ofs) {
@@ -1050,7 +1050,6 @@ int RGWPutObjProcessor_Atomic::write_data(bufferlist& bl, off_t ofs, void **phan
       return r;
     }
   }
-
   return RGWPutObjProcessor_Aio::handle_obj_data(cur_obj, bl, ofs - cur_part_ofs, ofs, phandle, exclusive);
 }
 
@@ -1201,7 +1200,7 @@ int RGWPutObjProcessor_Atomic::complete_writing_data()
     return r;
   }
 
-  r = drain_pending();
+  r = drain_pending(); // little slow
   if (r < 0)
     return r;
 
@@ -1212,7 +1211,9 @@ int RGWPutObjProcessor_Atomic::do_complete(string& etag, time_t *mtime, time_t s
                                            map<string, bufferlist>& attrs,
                                            const char *if_match,
                                            const char *if_nomatch) {
+  dout(0) << "complete_writing_data_enter " << this->get_unique_tag () << dendl;
   int r = complete_writing_data();
+  dout(0) << "complete_writing_data_exit " << this->get_unique_tag () << dendl;
   if (r < 0)
     return r;
 
@@ -1236,7 +1237,10 @@ int RGWPutObjProcessor_Atomic::do_complete(string& etag, time_t *mtime, time_t s
   obj_op.meta.flags = PUT_OBJ_CREATE;
   obj_op.meta.olh_epoch = olh_epoch;
 
-  r = obj_op.write_meta(obj_len, attrs);
+  dout(0) << "write_meta_enter " << this->get_unique_tag () << dendl;
+  //  r = obj_op.write_meta(obj_len, attrs);
+  r = obj_op.write_meta(obj_len, attrs, this->get_unique_tag ());
+  dout(0) << "write_meta_exit " << this->get_unique_tag () << dendl;
   if (r < 0) {
     return r;
   }
@@ -3501,6 +3505,210 @@ done_cancel:
 
   return r;
 }
+
+// for debug begin
+int RGWRados::Object::Write::write_meta(uint64_t size,
+					map<string, bufferlist>& attrs,
+					string unique_tag)
+{
+  rgw_bucket bucket;
+  rgw_rados_ref ref;
+  RGWRados *store = target->get_store();
+
+  ObjectWriteOperation op;
+
+  RGWObjState *state;
+  int r = target->get_state(&state, false);
+  if (r < 0)
+    return r;
+
+  rgw_obj& obj = target->get_obj();
+  r = store->get_obj_ref(obj, &ref, &bucket);
+  if (r < 0)
+    return r;
+
+  bool is_olh = state->is_olh;
+
+  bool reset_obj = (meta.flags & PUT_OBJ_CREATE) != 0;
+  r = target->prepare_atomic_modification(op, reset_obj, meta.ptag, meta.if_match, meta.if_nomatch, false);
+  if (r < 0)
+    return r;
+
+  utime_t ut;
+  if (meta.set_mtime) {
+    ut = utime_t(meta.set_mtime, 0);
+  } else {
+    ut = ceph_clock_now(0);
+    meta.set_mtime = ut.sec();
+  }
+
+  if (state->is_olh) {
+    op.setxattr(RGW_ATTR_OLH_ID_TAG, state->olh_tag);
+  }
+  op.mtime(&meta.set_mtime);
+
+  if (meta.data) {
+    /* if we want to overwrite the data, we also want to overwrite the
+       xattrs, so just remove the object */
+    op.write_full(*meta.data);
+  }
+
+  string etag;
+  string content_type;
+  bufferlist acl_bl;
+
+  map<string, bufferlist>::iterator iter;
+  if (meta.rmattrs) {
+    for (iter = meta.rmattrs->begin(); iter != meta.rmattrs->end(); ++iter) {
+      const string& name = iter->first;
+      op.rmxattr(name.c_str());
+    }
+  }
+
+  if (meta.manifest) {
+    /* remove existing manifest attr */
+    iter = attrs.find(RGW_ATTR_MANIFEST);
+    if (iter != attrs.end())
+      attrs.erase(iter);
+
+    bufferlist bl;
+    ::encode(*meta.manifest, bl);
+    op.setxattr(RGW_ATTR_MANIFEST, bl);
+  }
+
+  for (iter = attrs.begin(); iter != attrs.end(); ++iter) {
+    const string& name = iter->first;
+    bufferlist& bl = iter->second;
+
+    if (!bl.length())
+      continue;
+
+    op.setxattr(name.c_str(), bl);
+
+    if (name.compare(RGW_ATTR_ETAG) == 0) {
+      etag = bl.c_str();
+    } else if (name.compare(RGW_ATTR_CONTENT_TYPE) == 0) {
+      content_type = bl.c_str();
+    } else if (name.compare(RGW_ATTR_ACL) == 0) {
+      acl_bl = bl;
+    }
+  }
+
+  if (!op.size())
+    return 0;
+
+  string index_tag;
+  uint64_t epoch;
+  int64_t poolid;
+
+  bool orig_exists = state->exists;
+  uint64_t orig_size = state->size;
+
+  bool versioned_target = (meta.olh_epoch > 0 || !obj.get_instance().empty());
+
+  index_tag = state->write_tag;
+
+  bool versioned_op = (target->versioning_enabled() || is_olh || versioned_target);
+
+  RGWRados::Bucket bop(store, bucket);
+  RGWRados::Bucket::UpdateIndex index_op(&bop, obj, state);
+
+  dout(0) << "#a " << unique_tag << dendl;
+  if (versioned_op) {
+    index_op.set_bilog_flags(RGW_BILOG_FLAG_VERSIONED_OP);
+  }
+
+  dout(0) << "#b " << unique_tag << dendl;
+  r = index_op.prepare(CLS_RGW_OP_ADD);  // slow
+  if (r < 0)
+    return r;
+
+  dout(0) << "#c " << unique_tag << dendl;
+  r = ref.ioctx.operate(ref.oid, &op);  // slow
+  if (r < 0) { /* we can expect to get -ECANCELED if object was replaced under,
+                or -ENOENT if was removed, or -EEXIST if it did not exist
+                before and now it does */
+    goto done_cancel;
+  }
+
+  dout(0) << "#d " << unique_tag << dendl;
+  epoch = ref.ioctx.get_last_version();
+  poolid = ref.ioctx.get_id();
+
+  r = target->complete_atomic_modification();
+  if (r < 0) {
+    ldout(store->ctx(), 0) << "ERROR: complete_atomic_modification returned r=" << r << dendl;
+  }
+
+  r = index_op.complete(poolid, epoch, size,
+                        ut, etag, content_type, &acl_bl,
+                        meta.category, meta.remove_objs);
+  if (r < 0)
+    goto done_cancel;
+
+  if (meta.mtime) {
+    *meta.mtime = meta.set_mtime;
+  }
+
+  /* note that index_op was using state so we couldn't invalidate it earlier */
+  target->invalidate_state();
+  state = NULL;
+
+  if (versioned_op) {
+    r = store->set_olh(target->get_ctx(), target->get_bucket_info(), obj, false, NULL, meta.olh_epoch);
+    if (r < 0) {
+      return r;
+    }
+  }
+
+  /* update quota cache */
+  store->quota_handler->update_stats(meta.owner, bucket, (orig_exists ? 0 : 1), size, orig_size);
+
+  return 0;
+
+done_cancel:
+  int ret = index_op.cancel();
+  if (ret < 0) {
+    ldout(store->ctx(), 0) << "ERROR: index_op.cancel()() returned ret=" << ret << dendl;
+  }
+
+  /* we lost in a race. There are a few options:
+   * - existing object was rewritten (ECANCELED)
+   * - non existing object was created (EEXIST)
+   * - object was removed (ENOENT)
+   * should treat it as a success
+   */
+  if (meta.if_match == NULL && meta.if_nomatch == NULL) {
+    if (r == -ECANCELED || r == -ENOENT || r == -EEXIST) {
+      r = 0;
+    }
+  } else {
+    if (meta.if_match != NULL) {
+      // only overwrite existing object
+      if (strcmp(meta.if_match, "*") == 0) {
+        if (r == -ENOENT) {
+          r = -ERR_PRECONDITION_FAILED;
+        } else if (r == -ECANCELED) {
+          r = 0;
+        }
+      }
+    }
+
+    if (meta.if_nomatch != NULL) {
+      // only create a new object
+      if (strcmp(meta.if_nomatch, "*") == 0) {
+        if (r == -EEXIST) {
+          r = -ERR_PRECONDITION_FAILED;
+        } else if (r == -ENOENT) {
+          r = 0;
+        }
+      }
+    }
+  }
+
+  return r;
+}
+// for debug end
 
 /** Write/overwrite a system object. */
 int RGWRados::put_system_obj_impl(rgw_obj& obj, uint64_t size, time_t *mtime,

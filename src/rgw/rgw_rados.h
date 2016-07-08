@@ -1579,6 +1579,7 @@ public:
       Write(RGWRados::Object *_target) : target(_target) {}
 
       int write_meta(uint64_t size,  map<std::string, bufferlist>& attrs);
+      int write_meta(uint64_t size,  map<std::string, bufferlist>& attrs, string unique_tag);  // for debug
       int write_data(const char *data, uint64_t ofs, uint64_t len, bool exclusive);
     };
 
@@ -2436,6 +2437,8 @@ public:
   void set_version_id(const string& vid) {
     version_id = vid;
   }
+  string get_unique_tag () {return unique_tag;}
+  off_t get_cur_part_ofs () {return cur_part_ofs;}
 };
 
 #endif
